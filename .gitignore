@@ -9,6 +9,8 @@ robomaster_experiments/robomaster_data/data/
 *.iml
 out
 gen
+# VSCode configs
+.vscode
 ### macOS template
 # General
 .DS_Store
