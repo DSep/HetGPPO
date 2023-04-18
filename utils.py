@@ -19,19 +19,19 @@ from ray.rllib.utils.typing import PolicyID
 from ray.tune import register_env
 from vmas import make_env
 
-from evaluate.distance_metrics import *
-from models.gppo import GPPO
-from rllib_differentiable_comms.multi_action_dist import (
+from hetgppo.evaluate.distance_metrics import *
+from thesis.models.gppo import GPPO
+from hetgppo.rllib_differentiable_comms.multi_action_dist import (
     TorchHomogeneousMultiActionDistribution,
 )
-from rllib_differentiable_comms.multi_trainer import MultiPPOTrainer
+from hetgppo.rllib_differentiable_comms.multi_trainer import MultiPPOTrainer
 
 
 class PathUtils:
     scratch_dir = (
-        Path("/Users/Matteo/scratch/")
+        Path("/Users/sepand/scratch/")
         if platform.system() == "Darwin"
-        else Path("/local/scratch/mb2389/")
+        else Path("/local/scratch/sd974/")
     )
     gppo_dir = Path(__file__).parent.resolve()
     result_dir = gppo_dir / "results"
@@ -60,14 +60,16 @@ class InjectMode(Enum):
 
 class TrainingUtils:
     @staticmethod
-    def init_ray(scenario_name: str, local_mode: bool = False):
+    def init_ray(scenario_name, local_mode: bool = False):
         if not ray.is_initialized():
             ray.init(
                 _temp_dir=str(PathUtils.scratch_dir / "ray"),
                 local_mode=local_mode,
             )
             print("Ray init!")
+        print(f'Using scenario "{scenario_name}", type: {type(scenario_name)}')
         register_env(scenario_name, lambda config: TrainingUtils.env_creator(config))
+        print(f'Using model GPPO')
         ModelCatalog.register_custom_model("GPPO", GPPO)
         ModelCatalog.register_custom_action_dist(
             "hom_multi_action", TorchHomogeneousMultiActionDistribution
@@ -75,8 +77,9 @@ class TrainingUtils:
 
     @staticmethod
     def env_creator(config: Dict):
-        env = make_env(
-            scenario_name=config["scenario_name"],
+        env_params = {}
+        env_params.update(
+            scenario=config["scenario"],
             num_envs=config["num_envs"],
             device=config["device"],
             continuous_actions=config["continuous_actions"],
@@ -85,6 +88,7 @@ class TrainingUtils:
             # Scenario specific
             **config["scenario_config"],
         )
+        env = make_env(**env_params)
         return env
 
     class EvaluationCallbacks(DefaultCallbacks):
@@ -218,6 +222,7 @@ class EvaluationUtils:
             config = pickle.load(f)
         return config
 
+    # NOTE: This doesn't appear to be run/used
     @staticmethod
     def get_config_trainer_and_env_from_checkpoint(
         checkpoint_path: Union[str, Path],
@@ -225,7 +230,8 @@ class EvaluationUtils:
         config_update_fn: Callable[[Dict], Dict] = None,
     ):
         config = EvaluationUtils.get_checkpoint_config(checkpoint_path)
-        scenario_name = config["env"]
+        scenario_name = config["env"] # if type(config["env"]) is str else str(config["env"])
+        print(f"Got scenario name: {scenario_name}")
         TrainingUtils.init_ray(scenario_name=scenario_name)
 
         if for_evaluation:
