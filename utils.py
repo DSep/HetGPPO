@@ -20,6 +20,9 @@ from ray.tune import register_env
 from vmas import make_env
 
 from hetgppo.evaluate.distance_metrics import *
+# import hetgppo.models.gppo as gppo_module
+import thesis.models.gppo as gppo_module
+# from hetgppo.models.gppo import GPPO
 from thesis.models.gppo import GPPO
 from hetgppo.rllib_differentiable_comms.multi_action_dist import (
     TorchHomogeneousMultiActionDistribution,
@@ -33,7 +36,7 @@ class PathUtils:
         if platform.system() == "Darwin"
         else Path("/local/scratch/sd974/")
     )
-    gppo_dir = Path(__file__).parent.resolve()
+    gppo_dir = Path(gppo_module.__file__).parent.resolve()
     result_dir = gppo_dir / "results"
     rollout_storage = result_dir / "rollout_storage"
 
@@ -60,16 +63,18 @@ class InjectMode(Enum):
 
 class TrainingUtils:
     @staticmethod
-    def init_ray(scenario_name, local_mode: bool = False):
+    def init_ray(scenario_name, local_mode: bool = False, num_gpus=None):
         if not ray.is_initialized():
             ray.init(
                 _temp_dir=str(PathUtils.scratch_dir / "ray"),
                 local_mode=local_mode,
+                num_gpus=num_gpus,
             )
             print("Ray init!")
-        print(f'Using scenario "{scenario_name}", type: {type(scenario_name)}')
+        print(f'Using scenario "{scenario_name}"')
+        print(f'Using resources: {ray.cluster_resources()}')
         register_env(scenario_name, lambda config: TrainingUtils.env_creator(config))
-        print(f'Using model GPPO')
+        print(f'Using model GPPO', GPPO)
         ModelCatalog.register_custom_model("GPPO", GPPO)
         ModelCatalog.register_custom_action_dist(
             "hom_multi_action", TorchHomogeneousMultiActionDistribution
@@ -92,6 +97,7 @@ class TrainingUtils:
         return env
 
     class EvaluationCallbacks(DefaultCallbacks):
+        ''' Callbacks for metrics stored in the info dict. '''
         def on_episode_step(
             self,
             *,
@@ -137,7 +143,13 @@ class TrainingUtils:
             episode: Episode,
             **kwargs,
         ) -> None:
-            self.frames.append(base_env.vector_env.try_render_at(mode="rgb_array"))
+            # ray.logger.debug("RenderingCallbacks.on_episode_step called")
+            try:
+                self.frames.append(base_env.vector_env.try_render_at(mode="rgb_array"))
+            except Exception as e:
+                ray.logger.warning("Exception raised in RenderingCallbacks.on_episode_step callback: %s", e)
+                raise e
+            # self.frames.append(base_env.vector_env.try_render_at(mode="rgb_array"))
 
         def on_episode_end(
             self,
@@ -148,12 +160,16 @@ class TrainingUtils:
             episode: Episode,
             **kwargs,
         ) -> None:
-            vid = np.transpose(self.frames, (0, 3, 1, 2))
-            episode.media["rendering"] = wandb.Video(
-                vid, fps=1 / base_env.vector_env.env.world.dt, format="mp4"
-            )
-            self.frames = []
-
+            # ray.logger.debug("RenderingCallbacks.on_episode_end called")
+            try:
+                vid = np.transpose(self.frames, (0, 3, 1, 2))
+                episode.media["rendering"] = wandb.Video(
+                    vid, fps=1 / base_env.vector_env.env.world.dt, format="mp4"
+                )
+                self.frames = []
+            except Exception as e:
+                ray.logger.warning("Exception raised in RenderingCallbacks.on_episode_end callback: %s", e)
+                raise e
 
 class EvaluationUtils:
 
@@ -217,12 +233,12 @@ class EvaluationUtils:
 
     @staticmethod
     def get_checkpoint_config(checkpoint_path: Union[str, Path]):
-        params_path = Path(checkpoint_path).parent.parent / "params.pkl"
+        params_path = Path(checkpoint_path).parent / "params.pkl"
         with open(params_path, "rb") as f:
             config = pickle.load(f)
         return config
 
-    # NOTE: This doesn't appear to be run/used
+    # NOTE: This is used for HetGPPO/evaluate it seems
     @staticmethod
     def get_config_trainer_and_env_from_checkpoint(
         checkpoint_path: Union[str, Path],
